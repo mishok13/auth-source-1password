@@ -47,23 +47,20 @@ Replace invalid characters with underscore and warn if modified.
 
 Supported characters are listed here
 https://developer.1password.com/docs/cli/secret-reference-syntax/#supported-characters"
-  (let* ((sanitized (replace-regexp-in-string "[^a-zA-Z0-9_.- ]" "_" component))
-         (sanitized (if (string-match "^[0-9]" sanitized)
-                        (concat "_" sanitized)
-                      sanitized)))
-    (unless (string= component sanitized)
-      (warn "auth-source-1password: Sanitized '%s' to '%s' for 1Password compatibility" component sanitized))
-    sanitized))
+  (let* ((sanitized (replace-regexp-in-string "[^-. a-zA-Z0-9]" "_" component)))
+    (if (string-match "^[0-9]" sanitized)
+        (concat "_" sanitized)
+      sanitized)))
 
 (defun auth-source-1password--1password-construct-query-path (_backend _type host user _port)
   "Construct the full entry-path for the 1password entry for HOST and USER.
 Usually starting with the `auth-source-1password-vault', followed
 by host and user."
-  (mapconcat #'identity
-             (list (auth-source-1password--sanitize-component auth-source-1password-vault)
-                   (auth-source-1password--sanitize-component host)
-                   (auth-source-1password--sanitize-component user))
-             "/"))
+  (string-join
+   (list (auth-source-1password--sanitize-component auth-source-1password-vault)
+         (auth-source-1password--sanitize-component host)
+         (auth-source-1password--sanitize-component user))
+   "/"))
 
 (cl-defun auth-source-1password-search (&rest spec
                                               &key backend type host user port
@@ -71,12 +68,14 @@ by host and user."
   "Search 1password for the specified user and host.
 SPEC, BACKEND, TYPE, HOST, USER and PORT are required by auth-source."
   (if (executable-find auth-source-1password-executable)
-      (let ((got-secret
-             (string-trim
-              (shell-command-to-string
-               (format "%s read op://%s"
-                       auth-source-1password-executable
-                       (shell-quote-argument (funcall auth-source-1password-construct-secret-reference backend type host user port)))))))
+      (let* ((reference (funcall auth-source-1password-construct-secret-reference backend type host user port))
+             (got-secret
+              (string-trim
+               (shell-command-to-string
+                (format "%s read op://%s"
+                        auth-source-1password-executable
+                        (shell-quote-argument reference))))))
+        (warn "Reference used '%s'" reference)
         (list (list :user user
                     :secret got-secret)))
     (warn "`auth-source-1password': Could not find executable '%s' to query 1password" auth-source-1password-executable)))
@@ -110,13 +109,14 @@ SPEC, BACKEND, TYPE, HOST, USER and PORT are required by auth-source."
 
 (ert-deftest auth-source-1password--sanitize-component-valid ()
   "Test sanitization with valid characters."
-  (should (string= "valid_host.com" (auth-source-1password--sanitize-component "valid_host.com")))
+  (should (string= "example.com" (auth-source-1password--sanitize-component "example.com")))
   (should (string= "user-name" (auth-source-1password--sanitize-component "user-name")))
+  (should (string= "host with spaces" (auth-source-1password--sanitize-component "host with spaces")))
   (should (string= "vault123" (auth-source-1password--sanitize-component "vault123"))))
 
 (ert-deftest auth-source-1password--sanitize-component-invalid ()
   "Test sanitization with invalid characters."
-  (should (string= "host_with_spaces" (auth-source-1password--sanitize-component "host with spaces")))
+
   (should (string= "user_name" (auth-source-1password--sanitize-component "user@name")))
   (should (string= "special___chars" (auth-source-1password--sanitize-component "special!@#chars"))))
 
@@ -132,13 +132,13 @@ SPEC, BACKEND, TYPE, HOST, USER and PORT are required by auth-source."
 (ert-deftest auth-source-1password--construct-query-path-valid ()
   "Test path construction with valid components."
   (let ((auth-source-1password-vault "Personal"))
-    (should (string= "Personal/example.com/user"
-                     (auth-source-1password--1password-construct-query-path nil nil "example.com" "user" nil)))))
+    (should (string= "Personal/example.com/user name"
+                     (auth-source-1password--1password-construct-query-path nil nil "example.com" "user name" nil)))))
 
 (ert-deftest auth-source-1password--construct-query-path-sanitized ()
   "Test path construction with components needing sanitization."
-  (let ((auth-source-1password-vault "Personal Vault"))
-    (should (string= "Personal_Vault/host_with_spaces/user_name"
-                     (auth-source-1password--1password-construct-query-path nil nil "host with spaces" "user@name" nil)))))
+  (let ((auth-source-1password-vault "Personal%Vault"))
+    (should (string= "Personal_Vault/host_with_symbols/user_name"
+                     (auth-source-1password--1password-construct-query-path nil nil "host&with#symbols" "user@name" nil)))))
 
 ;;; auth-source-1password.el ends here
